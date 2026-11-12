@@ -3,7 +3,7 @@ import json
 import math
 import random
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -64,7 +64,7 @@ def gen_ohlcv(symbol: str, interval: str, periods: int):
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "time": datetime.utcnow().isoformat()}
+    return {"status": "ok", "time": datetime.now(timezone.utc).isoformat()}
 
 
 @app.get("/api/market/quote/{symbol}")
@@ -86,7 +86,7 @@ def quote(symbol: str):
         "change": change,
         "change_pct": change_pct,
         "volume": int(random.uniform(1000000, 5000000)),
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -144,7 +144,7 @@ def predict(symbol: str):
             "vix": round(random.uniform(12, 22), 1),
         },
         "disclaimer": "This is a probabilistic research signal, NOT investment advice. Past signals do not guarantee future results.",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
