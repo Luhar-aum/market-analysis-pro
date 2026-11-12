@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { createChart, ColorType, CandlestickSeries, HistogramSeries } from 'lightweight-charts'
+import { createChart, ColorType } from 'lightweight-charts'
 import { useOhlc } from '../hooks/useMarket'
 import { useThemeStore } from '../store/themeStore'
 
@@ -33,12 +33,12 @@ export default function Charts() {
       crosshair: { mode: 1 },
       timeScale: { timeVisible: true, secondsVisible: false },
     })
-    candleRef.current = chart.addSeries(CandlestickSeries, {
+    candleRef.current = chart.addCandlestickSeries({
       upColor: '#22c55e', downColor: '#ef4444',
       borderUpColor: '#22c55e', borderDownColor: '#ef4444',
       wickUpColor: '#22c55e', wickDownColor: '#ef4444',
     })
-    volRef.current = chart.addSeries(HistogramSeries, {
+    volRef.current = chart.addHistogramSeries({
       priceFormat: { type: 'volume' },
       priceScaleId: 'vol',
     })
