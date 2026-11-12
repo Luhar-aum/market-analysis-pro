@@ -1,16 +1,11 @@
-import asyncio
-import json
-import math
-import random
-import time
-from datetime import datetime, timedelta, timezone
-from typing import Optional
-
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+import asyncio
+import random
+from datetime import datetime, timedelta
+import math
 
-app = FastAPI(title="Market Analysis Pro API", version="1.0.0")
+app = FastAPI(title="Market Analysis API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -20,212 +15,241 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+active_connections: dict[str, list[WebSocket]] = {}
+
 SYMBOLS = {
-    "NIFTY50": {"base": 24500, "name": "Nifty 50"},
-    "SENSEX": {"base": 81200, "name": "BSE Sensex"},
-    "BANKNIFTY": {"base": 52300, "name": "Bank Nifty"},
-    "RELIANCE": {"base": 2950, "name": "Reliance Industries"},
-    "TCS": {"base": 4200, "name": "TCS"},
-    "INFY": {"base": 1850, "name": "Infosys"},
-    "HDFCBANK": {"base": 1720, "name": "HDFC Bank"},
-    "ICICIBANK": {"base": 1280, "name": "ICICI Bank"},
+    "NIFTY50": {"name": "Nifty 50", "base": 22500},
+    "SENSEX": {"name": "BSE Sensex", "base": 74000},
+    "BANKNIFTY": {"name": "Bank Nifty", "base": 48000},
+    "RELIANCE": {"name": "Reliance Industries", "base": 2900},
+    "TCS": {"name": "TCS", "base": 3800},
+    "INFY": {"name": "Infosys", "base": 1600},
+    "HDFC": {"name": "HDFC Bank", "base": 1550},
+    "ICICIBANK": {"name": "ICICI Bank", "base": 1150},
 }
 
-_price_state: dict = {}
 
-
-def get_price(symbol: str) -> float:
+def generate_mock_price(symbol: str, offset: float = 0):
     base = SYMBOLS.get(symbol, {}).get("base", 1000)
-    if symbol not in _price_state:
-        _price_state[symbol] = base
-    drift = random.gauss(0, base * 0.001)
-    _price_state[symbol] = max(base * 0.8, _price_state[symbol] + drift)
-    return round(_price_state[symbol], 2)
+    variation = base * 0.02 * math.sin(offset + random.random())
+    return round(base + variation, 2)
 
 
-def gen_ohlcv(symbol: str, interval: str, periods: int):
+def generate_ohlcv(symbol: str, interval: str, periods: int):
     base = SYMBOLS.get(symbol, {}).get("base", 1000)
-    minutes = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "1D": 1440, "1W": 10080}.get(interval, 5)
-    now = int(time.time())
     candles = []
+    now = datetime.now()
+
+    interval_minutes = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "1D": 1440, "1W": 10080}
+    mins = interval_minutes.get(interval, 5)
+
     price = base
     for i in range(periods, 0, -1):
-        ts = now - i * minutes * 60
-        open_ = price
-        change = random.gauss(0, base * 0.005)
-        close = round(open_ + change, 2)
-        high = round(max(open_, close) + abs(random.gauss(0, base * 0.002)), 2)
-        low = round(min(open_, close) - abs(random.gauss(0, base * 0.002)), 2)
-        volume = int(random.uniform(500000, 2000000))
-        candles.append({"time": ts, "open": open_, "high": high, "low": low, "close": close, "volume": volume})
+        ts = now - timedelta(minutes=mins * i)
+        change = price * random.uniform(-0.005, 0.005)
+        open_ = round(price, 2)
+        close = round(price + change, 2)
+        high = round(max(open_, close) * random.uniform(1.001, 1.008), 2)
+        low = round(min(open_, close) * random.uniform(0.992, 0.999), 2)
+        volume = random.randint(100000, 2000000)
+        candles.append({
+            "time": int(ts.timestamp()),
+            "open": open_,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": volume
+        })
         price = close
     return candles
 
 
 @app.get("/api/health")
-def health():
-    return {"status": "ok", "time": datetime.now(timezone.utc).isoformat()}
+async def health():
+    return {"status": "ok", "timestamp": datetime.now().isoformat()}
+
+
+@app.get("/api/market/symbols")
+async def get_symbols():
+    return {"symbols": [
+        {"symbol": k, "name": v["name"]} for k, v in SYMBOLS.items()
+    ]}
 
 
 @app.get("/api/market/quote/{symbol}")
-def quote(symbol: str):
+async def get_quote(symbol: str):
     sym = symbol.upper()
-    info = SYMBOLS.get(sym, {"base": 1000, "name": sym})
-    ltp = get_price(sym)
-    prev = info["base"]
-    change = round(ltp - prev, 2)
-    change_pct = round((change / prev) * 100, 2)
+    base = SYMBOLS.get(sym, {}).get("base", 1000)
+    ltp = generate_mock_price(sym)
+    prev_close = round(base * random.uniform(0.99, 1.01), 2)
+    change = round(ltp - prev_close, 2)
+    change_pct = round((change / prev_close) * 100, 2)
     return {
         "symbol": sym,
-        "name": info["name"],
+        "name": SYMBOLS.get(sym, {}).get("name", sym),
         "ltp": ltp,
-        "open": round(prev * random.uniform(0.998, 1.002), 2),
-        "high": round(ltp * random.uniform(1.001, 1.005), 2),
-        "low": round(ltp * random.uniform(0.995, 0.999), 2),
-        "close": round(prev, 2),
+        "open": round(prev_close * random.uniform(0.998, 1.002), 2),
+        "high": round(ltp * random.uniform(1.005, 1.015), 2),
+        "low": round(ltp * random.uniform(0.985, 0.995), 2),
+        "prev_close": prev_close,
         "change": change,
         "change_pct": change_pct,
-        "volume": int(random.uniform(1000000, 5000000)),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "volume": random.randint(1000000, 50000000),
+        "timestamp": datetime.now().isoformat()
     }
 
 
 @app.get("/api/market/ohlc/{symbol}")
-def ohlc(symbol: str, interval: str = "5m", periods: int = 100):
-    return {"symbol": symbol.upper(), "interval": interval, "candles": gen_ohlcv(symbol.upper(), interval, periods)}
+async def get_ohlc(symbol: str, interval: str = "5m", periods: int = 100):
+    sym = symbol.upper()
+    candles = generate_ohlcv(sym, interval, periods)
+    return {"symbol": sym, "interval": interval, "candles": candles}
 
 
 @app.get("/api/market/indicator/{symbol}")
-def indicator(symbol: str, type: str = "rsi", period: int = 14):
-    candles = gen_ohlcv(symbol.upper(), "5m", period + 50)
+async def get_indicator(symbol: str, type: str = "rsi", period: int = 14):
+    sym = symbol.upper()
+    candles = generate_ohlcv(sym, "5m", period * 3)
     closes = [c["close"] for c in candles]
+
     if type == "rsi":
         gains, losses = [], []
         for i in range(1, len(closes)):
-            d = closes[i] - closes[i - 1]
-            gains.append(max(d, 0))
-            losses.append(max(-d, 0))
+            diff = closes[i] - closes[i - 1]
+            gains.append(max(diff, 0))
+            losses.append(max(-diff, 0))
         avg_gain = sum(gains[-period:]) / period
         avg_loss = sum(losses[-period:]) / period
-        rs = avg_gain / avg_loss if avg_loss else 100
+        rs = avg_gain / avg_loss if avg_loss != 0 else 100
         rsi = round(100 - (100 / (1 + rs)), 2)
-        return {"symbol": symbol.upper(), "type": "rsi", "period": period, "value": rsi, "signal": "oversold" if rsi < 30 else "overbought" if rsi > 70 else "neutral"}
+        return {"symbol": sym, "indicator": "rsi", "period": period, "value": rsi}
+
     elif type == "macd":
-        ema12 = closes[-12] if len(closes) >= 12 else closes[-1]
-        ema26 = closes[-26] if len(closes) >= 26 else closes[-1]
-        macd = round(ema12 - ema26, 2)
-        signal = round(macd * 0.9, 2)
-        return {"symbol": symbol.upper(), "type": "macd", "macd": macd, "signal": signal, "histogram": round(macd - signal, 2)}
-    return {"symbol": symbol.upper(), "type": type, "value": None}
+        ema12 = sum(closes[-12:]) / 12
+        ema26 = sum(closes[-26:]) / 26
+        macd_line = round(ema12 - ema26, 2)
+        signal = round(macd_line * 0.9, 2)
+        histogram = round(macd_line - signal, 2)
+        return {"symbol": sym, "indicator": "macd", "macd": macd_line, "signal": signal, "histogram": histogram}
+
+    return {"symbol": sym, "indicator": type, "value": None, "error": "unsupported indicator"}
 
 
 @app.get("/api/predict/{symbol}")
-def predict(symbol: str):
+async def predict_direction(symbol: str):
     sym = symbol.upper()
-    directions = ["BULLISH", "BEARISH", "SIDEWAYS"]
+    directions = ["UP", "DOWN", "SIDEWAYS"]
     direction = random.choices(directions, weights=[0.4, 0.3, 0.3])[0]
     confidence = round(random.uniform(0.52, 0.78), 2)
-    rationales = {
-        "BULLISH": "Technical indicators show RSI recovering from oversold levels with positive MACD crossover. FII net buying has increased over the past 3 sessions. Global cues from Dow Jones are positive. Put-Call Ratio at 0.82 suggests bullish sentiment.",
-        "BEARISH": "RSI approaching overbought territory above 68. FII selling pressure observed. Crude oil prices rising, adding inflationary concerns. Put-Call Ratio elevated at 1.15 indicates defensive positioning.",
-        "SIDEWAYS": "Mixed signals from technical indicators. Market awaiting RBI policy outcome. FII activity balanced. RSI near neutral 50 level suggests consolidation likely.",
+
+    features = {
+        "rsi": round(random.uniform(30, 70), 1),
+        "macd_signal": random.choice(["bullish", "bearish", "neutral"]),
+        "pcr": round(random.uniform(0.7, 1.4), 2),
+        "fii_net": round(random.uniform(-3000, 3000), 0),
+        "sentiment_score": round(random.uniform(-1, 1), 2),
+        "vix": round(random.uniform(12, 22), 1)
     }
+
+    rationale_map = {
+        "UP": f"Technical indicators suggest bullish momentum with RSI at {features['rsi']}. FII activity shows net {'buying' if features['fii_net'] > 0 else 'selling'} of Rs.{abs(features['fii_net'])}Cr. PCR at {features['pcr']} indicates {'call writing' if features['pcr'] > 1 else 'put writing'} dominance.",
+        "DOWN": f"Bearish signals detected with RSI at {features['rsi']} showing potential overbought conditions. Global cues mixed with VIX at {features['vix']}. FII net flow of Rs.{features['fii_net']}Cr adds pressure.",
+        "SIDEWAYS": f"Consolidation expected near current levels. RSI neutral at {features['rsi']}, PCR balanced at {features['pcr']}. Market awaiting directional trigger."
+    }
+
     return {
         "symbol": sym,
         "direction": direction,
         "confidence": confidence,
-        "rationale": rationales[direction],
-        "features": {
-            "rsi": round(random.uniform(35, 70), 1),
-            "macd_signal": random.choice(["bullish_crossover", "bearish_crossover", "neutral"]),
-            "pcr": round(random.uniform(0.7, 1.3), 2),
-            "fii_net_cr": round(random.uniform(-3000, 3000), 0),
-            "news_sentiment": round(random.uniform(-1, 1), 2),
-            "vix": round(random.uniform(12, 22), 1),
-        },
-        "disclaimer": "This is a probabilistic research signal, NOT investment advice. Past signals do not guarantee future results.",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "rationale": rationale_map[direction],
+        "features": features,
+        "disclaimer": "This is a probabilistic research signal, NOT investment advice. Past performance does not guarantee future results.",
+        "timestamp": datetime.now().isoformat()
     }
-
-
-class BacktestRequest(BaseModel):
-    strategy_id: str = "default"
-    symbol: str = "NIFTY50"
-    start_date: str = "2024-01-01"
-    end_date: str = "2024-12-31"
-    capital: float = 100000
 
 
 @app.post("/api/backtest/run")
-def backtest_run(req: BacktestRequest):
-    n_days = 252
-    equity = [req.capital]
-    trades = []
-    pos = None
-    for i in range(n_days):
-        ret = random.gauss(0.0004, 0.012)
-        new_eq = equity[-1] * (1 + ret)
-        equity.append(round(new_eq, 2))
-        if random.random() < 0.08:
-            side = random.choice(["BUY", "SELL"])
-            pnl = round(random.gauss(500, 2000), 2)
-            trades.append({"day": i, "side": side, "pnl": pnl})
+async def run_backtest(body: dict):
+    symbol = body.get("symbol", "NIFTY50")
+    capital = body.get("capital", 100000)
 
-    total_return = round((equity[-1] - equity[0]) / equity[0] * 100, 2)
-    wins = [t for t in trades if t["pnl"] > 0]
-    losses = [t for t in trades if t["pnl"] <= 0]
-    max_dd = round(min(0, random.gauss(-8, 3)), 2)
-    cagr = round(total_return * (365 / n_days), 2)
-    sharpe = round(random.uniform(0.8, 2.1), 2)
+    trades = random.randint(45, 120)
+    win_rate = random.uniform(0.48, 0.65)
+    total_return = random.uniform(8, 28)
+
+    equity_curve = []
+    equity = capital
+    now = datetime.now()
+    for i in range(252):
+        daily_return = random.uniform(-0.015, 0.018)
+        equity = round(equity * (1 + daily_return), 2)
+        equity_curve.append({
+            "time": int((now - timedelta(days=252 - i)).timestamp()),
+            "value": equity
+        })
 
     return {
-        "symbol": req.symbol,
-        "capital": req.capital,
-        "final_value": equity[-1],
-        "total_return_pct": total_return,
-        "cagr_pct": cagr,
-        "sharpe_ratio": sharpe,
-        "max_drawdown_pct": max_dd,
-        "win_rate_pct": round(len(wins) / len(trades) * 100, 1) if trades else 0,
-        "total_trades": len(trades),
-        "avg_win": round(sum(t["pnl"] for t in wins) / len(wins), 2) if wins else 0,
-        "avg_loss": round(sum(t["pnl"] for t in losses) / len(losses), 2) if losses else 0,
-        "equity_curve": equity[::5],
-        "disclaimer": "Past backtest performance does not guarantee future results.",
+        "symbol": symbol,
+        "capital": capital,
+        "metrics": {
+            "total_return_pct": round(total_return, 2),
+            "cagr_pct": round(total_return * 0.9, 2),
+            "sharpe_ratio": round(random.uniform(0.8, 2.1), 2),
+            "max_drawdown_pct": round(random.uniform(5, 18), 2),
+            "win_rate_pct": round(win_rate * 100, 1),
+            "total_trades": trades,
+            "avg_win_pct": round(random.uniform(1.2, 3.5), 2),
+            "avg_loss_pct": round(random.uniform(0.8, 2.0), 2),
+            "profit_factor": round(random.uniform(1.1, 2.5), 2)
+        },
+        "equity_curve": equity_curve,
+        "disclaimer": "Past backtest performance does not guarantee future results."
     }
 
 
-@app.get("/api/broker/status")
-def broker_status():
+@app.get("/api/broker/positions")
+async def get_positions():
     return {
-        "connected": False,
-        "broker": None,
-        "mode": "paper",
-        "positions": [],
-        "daily_pnl": 0,
-        "daily_loss_limit": -5000,
-        "max_positions": 5,
-        "kill_switch_active": False,
-        "sebi_compliant": True,
-        "disclaimer": "Live trading requires SEBI-compliant broker API with static IP whitelisting and 2FA.",
+        "positions": [
+            {"symbol": "NIFTY50", "qty": 50, "avg_price": 22450, "ltp": 22510, "pnl": 3000, "type": "LONG"},
+            {"symbol": "BANKNIFTY", "qty": 25, "avg_price": 47900, "ltp": 48050, "pnl": 3750, "type": "LONG"},
+        ],
+        "total_pnl": 6750,
+        "mode": "PAPER"
+    }
+
+
+@app.post("/api/broker/order")
+async def place_order(body: dict):
+    return {
+        "order_id": f"ORD{random.randint(100000, 999999)}",
+        "status": "PENDING_CONFIRMATION",
+        "symbol": body.get("symbol"),
+        "qty": body.get("qty"),
+        "order_type": body.get("order_type", "MARKET"),
+        "mode": "PAPER",
+        "timestamp": datetime.now().isoformat(),
+        "message": "Order queued for manual confirmation (paper trading mode)"
     }
 
 
 @app.websocket("/ws/market/{symbol}")
-async def ws_market(websocket: WebSocket, symbol: str):
+async def websocket_market(websocket: WebSocket, symbol: str):
     await websocket.accept()
     sym = symbol.upper()
+    offset = random.random() * 100
     try:
         while True:
-            ltp = get_price(sym)
-            info = SYMBOLS.get(sym, {"base": ltp, "name": sym})
-            prev = info["base"]
+            offset += 0.1
+            price = generate_mock_price(sym, offset)
+            change = round(price - SYMBOLS.get(sym, {}).get("base", 1000), 2)
             await websocket.send_json({
                 "symbol": sym,
-                "ltp": ltp,
-                "change": round(ltp - prev, 2),
-                "change_pct": round((ltp - prev) / prev * 100, 2),
-                "timestamp": datetime.utcnow().isoformat(),
+                "ltp": price,
+                "change": change,
+                "change_pct": round(change / SYMBOLS.get(sym, {}).get("base", 1000) * 100, 2),
+                "volume": random.randint(100, 10000),
+                "timestamp": datetime.now().isoformat()
             })
             await asyncio.sleep(1)
     except WebSocketDisconnect:
