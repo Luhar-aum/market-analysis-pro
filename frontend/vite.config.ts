@@ -9,4 +9,16 @@ export default defineConfig({
       '/ws': { target: 'ws://localhost:8000', ws: true },
     },
   },
+  build: {
+    chunkSizeWarningLimit: 1000,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ['react', 'react-dom'],
+          charts: ['lightweight-charts', 'recharts'],
+          query: ['@tanstack/react-query', 'zustand'],
+        },
+      },
+    },
+  },
 })
