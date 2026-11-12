@@ -18,7 +18,7 @@ COPY backend/ ./backend/
 COPY --from=frontend-build /app/frontend/dist /var/www/html
 
 RUN echo 'server { \n\
-  listen 80; \n\
+  listen 3000; \n\
   root /var/www/html; \n\
   index index.html; \n\
   location / { try_files $uri $uri/ /index.html; } \n\
@@ -34,6 +34,6 @@ RUN echo 'server { \n\
 COPY start.sh /start.sh
 RUN chmod +x /start.sh
 
-EXPOSE 80
+EXPOSE 3000
 
 CMD ["/start.sh"]
